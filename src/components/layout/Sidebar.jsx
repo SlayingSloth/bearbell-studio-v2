@@ -3,6 +3,8 @@ import { useAuth } from "../../hooks/useAuth";
 import { signOutUser } from "../../lib/firebase/auth";
 import { useDriveStore } from "../../stores/driveStore";
 import { TAGLINE } from "../../lib/brand/strings";
+import { NewPostButton } from "../sidebar/NewPostButton";
+import { PostList } from "../sidebar/PostList";
 
 export function Sidebar() {
   const { user } = useAuth();
@@ -26,10 +28,14 @@ export function Sidebar() {
         </p>
       </div>
 
-      <div className="flex-1 px-6">
-        <h2 className="font-body text-xs uppercase tracking-wider text-steel mb-2">
+      <div className="flex-1 flex flex-col min-h-0">
+        <h2 className="font-body text-xs uppercase tracking-wider text-steel px-6 mb-2">
           Posts
         </h2>
+        <NewPostButton />
+        <div className="flex-1 overflow-y-auto">
+          <PostList />
+        </div>
       </div>
 
       <div className="mt-auto px-6 py-4 border-t border-darkblue">

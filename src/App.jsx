@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./pages/Login";
 import { Signup } from "./pages/Signup";
 import { Dashboard } from "./pages/Dashboard";
-import { EditorPlaceholder } from "./pages/EditorPlaceholder";
+import { EditorPage } from "./pages/EditorPage";
 import { ProtectedRoute } from "./components/shared/ProtectedRoute";
 import { AppShell } from "./components/layout/AppShell";
 
@@ -27,7 +27,7 @@ function App() {
           element={
             <ProtectedRoute>
               <AppShell>
-                <EditorPlaceholder />
+                <EditorPage />
               </AppShell>
             </ProtectedRoute>
           }
