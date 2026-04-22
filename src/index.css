@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-navy: #132234;
+  --color-orange: #F97316;
+  --color-ice: #E5E7EB;
+  --color-steel: #94A3B8;
+  --color-darkblue: #1B263B;
+  --color-cream: #EEF0F3;
+  --color-ink: #0D1B2A;
+
+  --font-display: "Bebas Neue", sans-serif;
+  --font-quote: "Lora", serif;
+  --font-body: "Outfit", sans-serif;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Lora:ital@1&family=Outfit:wght@300;400;500;600;700&display=swap');
