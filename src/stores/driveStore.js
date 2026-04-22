@@ -4,6 +4,11 @@ import {
   refreshAccessToken,
   revokeAccessToken,
 } from "../lib/drive/auth";
+import { ensureAppFolder } from "../lib/drive/folder";
+import {
+  getUserDriveSettings,
+  setUserDriveSettings,
+} from "../lib/firebase/firestore";
 
 const DRIVE_AUTHED_KEY = "drive_authed";
 
@@ -22,6 +27,9 @@ export const useDriveStore = create((set, get) => ({
   isLoading: false,
   error: null,
   needsReconnect: false,
+  driveFolderId: null,
+  bootstrapState: "idle",
+  bootstrapError: null,
 
   async connect() {
     set({ isLoading: true, error: null });
@@ -58,6 +66,9 @@ export const useDriveStore = create((set, get) => ({
       isLoading: false,
       error: null,
       needsReconnect: false,
+      driveFolderId: null,
+      bootstrapState: "idle",
+      bootstrapError: null,
     });
   },
 
@@ -112,6 +123,37 @@ export const useDriveStore = create((set, get) => ({
         needsReconnect: true,
       });
       throw err;
+    }
+  },
+
+  /**
+   * Ensure the BEARBELL Content Studio folder exists in the user's Drive,
+   * and that its ID is persisted in Firestore. Idempotent: if the folder
+   * exists in Drive but not Firestore, only Firestore is updated. If it
+   * exists in Firestore but was deleted from Drive, a new folder is created
+   * and Firestore is updated to match.
+   * @param {string} uid
+   */
+  async bootstrapDriveFolder(uid) {
+    if (get().bootstrapState === "loading") return;
+    set({ bootstrapState: "loading", bootstrapError: null });
+    try {
+      const settings = await getUserDriveSettings(uid);
+      const existingInFirestore = settings?.driveFolderId ?? null;
+      const folderId = await ensureAppFolder();
+      if (existingInFirestore !== folderId) {
+        await setUserDriveSettings(uid, { driveFolderId: folderId });
+      }
+      set({
+        driveFolderId: folderId,
+        bootstrapState: "ready",
+        bootstrapError: null,
+      });
+    } catch (err) {
+      set({
+        bootstrapState: "error",
+        bootstrapError: err?.message || "Drive-map bootstrap mislukt.",
+      });
     }
   },
 }));
