@@ -18,13 +18,15 @@ Agent instructions for building BEARBELL Content Studio v2. This file is read ev
 
 ## Absolute rules (never violate)
 
-1. **No paid services.** No Claude API. No OpenAI. No paid Cloudflare. No Stripe. Free tiers only: Firebase Spark, Netlify free, GitHub free, Google Cloud free credits for Picker API.
-2. **No tracking or analytics SDKs** beyond the app's own internal performance-logger writing to Firestore. No Google Analytics, no Meta Pixel, no Mixpanel.
-3. **Brand system is locked.** Colors, fonts, and sizes listed below are the only allowed values. No Tailwind defaults like `bg-blue-500`. No Google fonts other than Bebas Neue, Lora, Outfit.
-4. **Firestore only.** Do not use Firebase Realtime Database. The old app uses it, we do not.
-5. **No server.** This is a client-only React app. No Express, no Next.js API routes, no Cloud Functions (until the user explicitly asks).
-6. **No localStorage/sessionStorage for app data.** State lives in Zustand (memory) and Firestore (persistence). The only localStorage use is the "remember me" flag for auth.
-7. **Never introduce a new dependency without asking.** Dependencies are listed in section "Approved dependencies". If a task seems to need a new one, propose it first.
+1. **No paid services.** No Claude API. No OpenAI. No paid Cloudflare. No Stripe. Free tiers only: Firebase Spark, Netlify free, GitHub free, Google Cloud free quotas for Drive/Picker APIs.
+2. **No credit card required.** This project runs on Firebase Spark (no Blaze upgrade) and free Google Cloud quotas. Never suggest a change that requires upgrading to a paid tier.
+3. **No Firebase Storage. Ever.** All asset storage happens in the user's Google Drive via Drive API v3 + Picker API. Do not import from `firebase/storage`. Do not add Storage helpers. If an asset needs to be stored, it goes to Drive.
+4. **No tracking or analytics SDKs** beyond the app's own internal performance-logger writing to Firestore. No Google Analytics, no Meta Pixel, no Mixpanel.
+5. **Brand system is locked.** Colors, fonts, and sizes listed below are the only allowed values. No Tailwind defaults like `bg-blue-500`. No Google fonts other than Bebas Neue, Lora, Outfit.
+6. **Firestore only for database.** Do not use Firebase Realtime Database. The old app uses it, we do not.
+7. **No server.** This is a client-only React app. No Express, no Next.js API routes, no Cloud Functions.
+8. **No localStorage/sessionStorage for app data.** State lives in Zustand (memory) and Firestore (persistence). The only localStorage use is the "remember me" auth flag and the Drive access token (until we move it to an in-memory-only store with proper refresh).
+9. **Never introduce a new dependency without asking.** Dependencies are listed in "Approved dependencies" below.
 
 ---
 
@@ -34,15 +36,17 @@ Agent instructions for building BEARBELL Content Studio v2. This file is read ev
 |---------|------|-------|
 | Build | Vite | React template |
 | UI | React 18 | Function components + hooks only, no class components |
-| Styling | Tailwind CSS 3 | Utility-first, no separate CSS files except `index.css` |
+| Styling | Tailwind CSS v4 | With `@tailwindcss/vite` plugin. Config lives in `src/index.css` via `@theme`. No `tailwind.config.js` |
 | State | Zustand | One store per domain, not a single mega-store |
 | Routing | React Router v6 | |
 | Canvas drag/resize | react-moveable | Do not swap for dnd-kit or Konva |
 | Rich text | Tiptap v2 | Only inside text elements on the canvas |
 | Shortcuts | react-hotkeys-hook | |
-| Firebase | v10 modular SDK | Tree-shakeable imports only |
-| Drive | Google Picker API v2 | Loaded via script tag, lazy |
-| Export | html-to-image | For PNG, wrap with `document.fonts.ready` |
+| Firebase | v10 modular SDK | Tree-shakeable imports, `firebase/auth` and `firebase/firestore` ONLY |
+| Drive OAuth | Google Identity Services (GIS) | Lazy-load script `https://accounts.google.com/gsi/client` |
+| Drive API | Google Drive API v3 | Lazy-load `gapi` client from `https://apis.google.com/js/api.js` |
+| Picker | Google Picker API | Lazy-load along with gapi |
+| Export | html-to-image | For PNG, wrap with `document.fonts.ready` and use base64 images |
 | IDs | nanoid | For all generated IDs, not uuid |
 | Dates | date-fns | Not moment |
 
@@ -50,11 +54,12 @@ Agent instructions for building BEARBELL Content Studio v2. This file is read ev
 
 ## Brand system
 
-These are the ONLY allowed design tokens. Hardcode in `src/lib/brand/tokens.js` and import everywhere. Never write raw hex values or font names in components.
+These are the ONLY allowed design tokens. Defined in `src/index.css` via Tailwind v4 `@theme` block AND re-exported from `src/lib/brand/tokens.js` for JS access. Never write raw hex values or font names in components.
 
 ### Colors
 
 ```js
+// src/lib/brand/tokens.js
 export const COLORS = {
   navy:     "#132234", // primary
   orange:   "#F97316", // accent
@@ -68,6 +73,8 @@ export const COLORS = {
 
 No other colors. Color pickers render only these seven options plus a locked "custom" escape that shows a warning modal.
 
+Tailwind classes that reference these: `bg-navy`, `text-orange`, `border-ice` etc. are auto-generated by the `@theme` block.
+
 ### Fonts
 
 ```js
@@ -79,6 +86,8 @@ export const FONTS = {
 ```
 
 No Inter, no Roboto, no Barlow Condensed, no DM Mono, no Space Grotesk.
+
+Tailwind classes: `font-display`, `font-quote`, `font-body`.
 
 ### Font size ranges
 
@@ -92,14 +101,12 @@ export const SIZE_RANGES = {
 
 Inspector panel clamps input values to these ranges.
 
-### Fixed strings
+### Fixed strings (`src/lib/brand/strings.js`)
 
 - Tagline: `STRENGTH · PERSONAL`
 - Kernzin: `Hier lachen we hard. En trainen we harder.`
 - Merkbelofte: `Wij verkopen geen abonnementen. Wij leveren resultaten.`
 - Sign-off: `FITTER. STERKER. BETER IN JE VEL.`
-
-These live in `src/lib/brand/strings.js` as constants.
 
 ### Carousel slide specs (locked)
 
@@ -113,13 +120,70 @@ External-facing text uses "vier fases" only. Never "26 weken". Week numbers are 
 
 ---
 
+## Asset architecture (Drive-based)
+
+This is the most important architectural decision. Read carefully.
+
+### Principles
+
+- All user media lives in Google Drive, not in the app's backend.
+- The app has access only to files it created or files the user explicitly selects via Picker (OAuth scope `drive.file`).
+- Firestore stores asset *metadata* only (driveFileId, tags, dimensions, ownership). It never stores image binary data, never stores full Drive URLs.
+- On first login, the app creates a folder `BEARBELL Content Studio` in the user's Drive root and saves its `driveFolderId` in `/users/{uid}/settings/drive`.
+
+### Two asset entry points
+
+**1. Kies uit Drive (Google Picker)**
+
+- User clicks "Kies uit Drive" in asset library
+- Picker opens with `DocsUploadView` and `DocsView` (images only)
+- On select, we register the file in Firestore as an asset
+- Drive file ID is what we persist, not the temporary picker URL
+
+**2. Upload nieuwe foto (direct upload)**
+
+- User clicks "Upload nieuwe foto", file picker opens
+- File is uploaded via Drive API v3 multipart upload
+- Destination: the `BEARBELL Content Studio` folder (driveFolderId from user settings)
+- Returned file ID stored in Firestore asset document
+- Works on desktop and mobile (mobile file picker shows camera as option)
+
+### Image loading on canvas
+
+**Critical**: Drive image URLs have CORS restrictions that break `html-to-image` PNG export. Therefore:
+
+- When loading an image onto the canvas, fetch bytes via Drive API (`files.get` with `alt=media`), convert to base64 data URL, and use that as the image `src`.
+- Cache base64 data URLs in-memory (Zustand `assetStore.cache`) keyed by driveFileId.
+- Do NOT use `https://drive.google.com/uc?id=...` URLs, they will fail CORS on export.
+- Do NOT persist base64 in Firestore: it's for runtime only.
+
+### Thumbnails
+
+- Drive thumbnails for asset library use `https://drive.google.com/thumbnail?id={fileId}&sz=w400` (CORS-OK for display, not for export)
+- Post thumbnails (for the post list) are client-side generated via `html-to-image` at 300x300, 0.7 JPEG quality, stored as base64 string in the post document's `thumbnailDataUrl` field in Firestore (~30KB per post, well within Firestore's 1MB doc limit)
+
+### OAuth
+
+- Use Google Identity Services (GIS) token flow, NOT the older gapi auth flow
+- Request scope: `https://www.googleapis.com/auth/drive.file`
+- Access tokens expire after 1 hour; implement silent refresh via GIS `requestAccessToken({ prompt: '' })`
+- Store current access token in-memory in a Zustand store, never in Firestore
+- `localStorage` may hold a small "drive_authed" flag so we know to attempt silent refresh on page load, but never the token itself
+
+---
+
 ## Architecture
 
 ### Firestore data model
 
 ```
 /users/{uid}
-  email, displayName, createdAt, settings
+  email, displayName, createdAt
+  /settings/drive
+    driveFolderId       // BEARBELL Content Studio folder ID in user's Drive
+    folderCreatedAt
+  /settings/app
+    defaultFormat, shortcuts overrides
 
 /posts/{postId}
   ownerId            // uid of creator
@@ -131,7 +195,7 @@ External-facing text uses "vier fases" only. Never "26 weken". Week numbers are 
   slideOrder         // string[] of slideIds
   slides             // map of slideId -> Slide
   shareToken         // string | null
-  thumbnailUrl       // string | null
+  thumbnailDataUrl   // base64 JPEG, client-generated, max ~50KB
 
 Slide = {
   id, type, backgroundColor, backgroundImage,
@@ -143,20 +207,27 @@ Element = {
   id, kind, x, y, w, h, rotation, zIndex, locked,
   // kind-specific:
   text?:  { content (JSON from Tiptap), font, size, color, weight, align, lineHeight, letterSpacing },
-  image?: { assetId, fit, filters },
+  image?: { assetId, fit, filters },   // assetId references /assets/{assetId}; bytes loaded via Drive at runtime
   shape?: { kind, fill, stroke, strokeWidth, radius },
   logo?:  { variant }  // 'light' | 'dark'
 }
 
 /templates/{templateId}
-  ownerId, name, category, thumbnailUrl,
+  ownerId, name, category, thumbnailDataUrl,
   slideOrder, slides (same structure as post)
 
 /assets/{assetId}
-  ownerId, source: 'upload' | 'drive',
-  url, driveFileId?, storageRef?,
-  tags: string[], clientName?, dimensions: {w, h},
-  uploadedAt
+  ownerId
+  driveFileId         // THE primary reference; all binary lives in Drive
+  driveFolderId       // for uploads, the parent folder
+  source: 'upload' | 'picker'
+  fileName
+  mimeType            // 'image/jpeg', 'image/png', 'image/webp'
+  dimensions: {w, h}
+  tags: string[]
+  clientName?: string
+  createdAt
+  // NO url, NO base64 data; these are derived at runtime
 
 /versions/{postId}/history/{versionId}
   timestamp, label, snapshot  // full post object
@@ -181,14 +252,15 @@ src/
     sidebar/          // <PostList>, <TemplateList>, <AssetLibrary>
     modals/           // <VersionHistory>, <ShareReviewLink>, <PerformanceLogger>, <DrivePicker>
     shared/           // <Button>, <Input>, <ColorPicker>, <FontPicker> (brand-constrained)
-  hooks/              // useCanvas, usePost, useAssets, useShortcuts, useVersions
-  stores/             // postStore, canvasStore, uiStore, assetStore
+  hooks/              // useCanvas, usePost, useAssets, useShortcuts, useVersions, useDriveAuth
+  stores/             // postStore, canvasStore, uiStore, assetStore, driveStore
   lib/
-    firebase/         // auth.js, firestore.js, storage.js, init.js
+    firebase/         // auth.js, firestore.js, init.js  (NO storage.js)
+    drive/            // auth.js (GIS), client.js (gapi), picker.js, upload.js, download.js
     brand/            // tokens.js, strings.js, guards.js
-    export/           // toPng.js, toPdf.js
+    export/           // toPng.js, toPdf.js, thumbnail.js
   pages/              // Login, Editor, Review, Dashboard
-  types/              // jsdoc type defs or plain js object shapes
+  types/              // jsdoc type defs
 ```
 
 ### State management rules
@@ -196,7 +268,8 @@ src/
 - **postStore**: current post being edited, slide operations, element CRUD
 - **canvasStore**: selection, zoom, pan, snap settings
 - **uiStore**: modals, sidebars, toasts
-- **assetStore**: asset library, filters, upload queue
+- **assetStore**: asset library list, filters, upload queue, **base64 image cache keyed by driveFileId**
+- **driveStore**: OAuth state, access token (in-memory), folder ID, ready flag
 
 Never share state across stores by importing one into another. Communicate via the component tree or via a dedicated event.
 
@@ -204,8 +277,17 @@ Never share state across stores by importing one into another. Communicate via t
 
 - Read/write Firestore only through helpers in `src/lib/firebase/firestore.js`.
 - Components never call `getDoc`, `setDoc` etc. directly.
-- All helpers return typed results and handle errors.
 - Batch writes when updating multiple elements on the same slide.
+
+### Drive access rules
+
+- Read/write Drive only through helpers in `src/lib/drive/`.
+- `auth.js` handles GIS token flow, silent refresh.
+- `client.js` exposes a ready-to-use gapi.client.drive instance.
+- `picker.js` exports `openPicker(options)` returning a Promise<PickedFile[]>.
+- `upload.js` exports `uploadToAppFolder(file)` returning Promise<DriveFileId>.
+- `download.js` exports `fetchAsBase64(fileId)` returning Promise<string>.
+- Components never call `gapi.*` or `google.accounts.*` directly.
 
 ---
 
@@ -221,9 +303,9 @@ Never share state across stores by importing one into another. Communicate via t
 
 ### Styling
 
-- Tailwind classes inline. No CSS-in-JS. No styled-components.
+- Tailwind v4 utility classes inline. No CSS-in-JS. No styled-components.
 - For conditional classes, use `clsx`.
-- Custom values go in `tailwind.config.js`, not arbitrary values `[#123456]`.
+- Custom values go through the `@theme` block in `src/index.css`, not arbitrary `[#123456]`.
 - Arbitrary values are only allowed for the 1080x1080 canvas dimensions.
 
 ### Naming
@@ -232,13 +314,15 @@ Never share state across stores by importing one into another. Communicate via t
 - Hooks: camelCase starting with `use`
 - Stores: camelCase ending with `Store`
 - Firebase helpers: camelCase verb-first (`getPost`, `updateSlide`)
+- Drive helpers: camelCase verb-first (`uploadToAppFolder`, `fetchAsBase64`)
 - Constants: SCREAMING_SNAKE_CASE
 - Files: match the primary export
 
 ### Async
 
 - Always `async/await`, never `.then()` chains.
-- Every Firebase call wrapped in try/catch with user-facing error surfaced via `uiStore` toast.
+- Every external call (Firebase, Drive) wrapped in try/catch with user-facing error surfaced via `uiStore` toast.
+- For Drive calls, handle 401 (token expired) by attempting silent refresh then retrying once before surfacing.
 
 ### Error handling
 
@@ -254,6 +338,7 @@ Never share state across stores by importing one into another. Communicate via t
 - Canvas render with 30 elements: 60fps on mid-range laptop.
 - Bundle size after tree-shake: under 500kb gzipped for main chunk.
 - Firebase reads per editor session: under 50 for a post with 20 versions and 10 comments.
+- Drive API calls per session: cache aggressively; never refetch the same fileId twice in one session.
 
 If a change violates a budget, stop and ask.
 
@@ -261,17 +346,23 @@ If a change violates a budget, stop and ask.
 
 ## Approved dependencies
 
-Already installed in `package.json`. Do not add new ones without asking first.
+Already installed. Do not add new ones without asking first.
 
 **Prod**: react, react-dom, react-router-dom, firebase, zustand, react-moveable, @tiptap/react, @tiptap/starter-kit, @tiptap/extension-color, @tiptap/extension-text-style, react-hotkeys-hook, html-to-image, nanoid, clsx, date-fns
 
-**Dev**: vite, @vitejs/plugin-react, tailwindcss, postcss, autoprefixer, eslint, prettier
+**Dev**: vite, @vitejs/plugin-react, tailwindcss, @tailwindcss/vite, eslint, prettier
+
+**Loaded via script tag at runtime (not npm)**:
+- Google Identity Services: `https://accounts.google.com/gsi/client`
+- gapi client: `https://apis.google.com/js/api.js`
+- Google Picker: loaded via `gapi.load('picker')`
 
 ---
 
 ## What NOT to build
 
-- No social login (Google/Apple sign-in). Email+password only until requested.
+- **No Firebase Storage usage.** Do not add `firebase/storage`, do not reference `getStorage`, do not create a storage.js. Asset storage is Drive, period.
+- No social login (Google/Apple sign-in for Firebase Auth). Email+password only. Note: Drive OAuth is separate from Firebase Auth login.
 - No AI features. No image generation. No text generation. User explicitly said no Claude API.
 - No real-time collaborative editing. Review flow is async via shareable links.
 - No Cloud Functions or backend logic. Everything client-side.
@@ -288,6 +379,7 @@ Already installed in `package.json`. Do not add new ones without asking first.
 - Commits: conventional commits style. Examples:
   - `feat(canvas): add snap-to-grid with 12-column guides`
   - `fix(export): wait for fonts.ready before toPng`
+  - `feat(drive): add picker integration for existing images`
   - `chore(deps): bump tiptap to 2.4.1`
 - Never commit directly to main. PR or merge via CLI after local verification.
 - Never commit `.env.local`, `node_modules`, `dist`.
@@ -296,14 +388,16 @@ Already installed in `package.json`. Do not add new ones without asking first.
 
 ## Context on existing BEARBELL systems
 
-These exist but are out of scope for this project. Do not integrate with them unless asked:
+These exist but are out of scope. Do not integrate:
 
-- `bearbell.nl`: WordPress site, Astra child theme
-- BEARBELL CRM: separate React app (`bearbell-crm-v4`)
+- `bearbell.nl`: WordPress site
+- BEARBELL CRM: separate React app
 - Old Content Studio: single-file HTML on Netlify, Firebase Realtime DB project `bearbell-content-studio`
-- Kennisbank: WordPress articles on bearbell.nl
+- Kennisbank: WordPress articles
 
 This project is standalone. It reads nothing from those systems and writes nothing to them.
+
+The user's Google Drive is the shared resource. The Content Studio app creates its own folder in Drive; other BEARBELL projects may read from other folders in the same Drive without any integration through this app.
 
 ---
 
@@ -314,3 +408,4 @@ This project is standalone. It reads nothing from those systems and writes nothi
 - Prefer deleting code over adding flags.
 - If a feature is not in the 6-week plan (see SETUP-PLAN.md), ask before building it.
 - If the user gives a vague instruction, ask one specific question with A/B options. Do not guess.
+- If you find yourself considering Firebase Storage as a solution, stop. Drive is the answer.
