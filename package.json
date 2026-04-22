@@ -23,6 +23,7 @@
     "react-dom": "^19.2.5",
     "react-hotkeys-hook": "^5.2.4",
     "react-moveable": "^0.56.0",
+    "react-router-dom": "^7.14.2",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
